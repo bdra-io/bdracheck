@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,13 +42,22 @@ type RingConfig struct {
 }
 
 func main() {
-	fmt.Println("🚀 BDRA Static Analysis Linter Engine Engine Initializing...")
+	// Define supported CLI flags
+	configFlag := flag.String("config", "bdracheck.json", "Path to the BDRA architecture governance configuration file")
+	flag.Parse()
 
-	// 1. Load local rule matrix configuration
-	configFile := "bdracheck.json"
-	configData, err := os.ReadFile(configFile)
+	args := flag.Args()
+	if len(args) == 0 || args[0] != "verify" {
+		fmt.Println("Usage: bdracheck verify [--config=path/to/bdracheck.json]")
+		os.Exit(1)
+	}
+
+	fmt.Printf("🚀 BDRA Static Analysis Linter Engine Engine Initializing using [%s]...\n", *configFlag)
+
+	// 1. Load the rule matrix configuration
+	configData, err := os.ReadFile(*configFlag)
 	if err != nil {
-		fmt.Printf("❌ Fatal: Failed to read compliance configuration file (%s): %v\n", configFile, err)
+		fmt.Printf("❌ Fatal: Failed to read compliance configuration file (%s): %v\n", *configFlag, err)
 		os.Exit(1)
 	}
 
@@ -57,9 +67,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 2. Discover and harvest target Go source targets
+	// 2. Discover and harvest target Go source targets dynamically inside internal/
 	var goFiles []string
-	err = filepath.Walk("internal", func(path string, info os.FileInfo, err error) error {
+	searchDir := "internal"
+	
+	if _, err := os.Stat(searchDir); os.IsNotExist(err) {
+		fmt.Printf("❌ Error: Target validation directory '%s' not found in current execution path.\n", searchDir)
+		os.Exit(1)
+	}
+
+	err = filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}

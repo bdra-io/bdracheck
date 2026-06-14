@@ -1,0 +1,40 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    name: Test and Build Linter Engine
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code Repository
+      uses: actions/checkout@v4
+
+    - name: Set Up Go Runtime Environment
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+        cache: true # Automatically caches Go modules and build targets to maximize speed
+
+    - name: Verify Code Formatting
+      run: |
+        if [ -n "$(gofmt -l .)" ]; then
+          echo "❌ The following files do not match standard gofmt rules:"
+          gofmt -l .
+          exit 1
+        fi
+        echo "✅ Code formatting is perfectly compliant."
+
+    - name: Run Go Vet Compiler Checks
+      run: go vet ./...
+
+    - name: Execute AST Invariant Unit Tests
+      run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+    - name: Verify Binary Compilation Stability
+      run: go build -v -o target/bdracheck .

@@ -7,70 +7,138 @@ import (
 	"go/token"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
-// AnalyzeCodebase inspects harvested source streams, parsing layout rules using AST nodes
+// Violation represents an isolated architectural boundary breach
+type Violation struct {
+	Position string
+	Layer    string
+	Message  string
+}
+
+// AnalyzeCodebase orchestrates concurrent AST evaluation loops across all discovered source files
 func AnalyzeCodebase(files []string, config Config) int {
-	violations := 0
-	fset := token.NewFileSet() // Tracks position coordinates across the code workspace
+	var wg sync.WaitGroup
+	violationChan := make(chan Violation, len(files)*2)
+	fset := token.NewFileSet()
 
+	// 1. CONCURRENT PIPELINE: Distribute file parsing routines across active system threads
 	for _, fileTarget := range files {
-		// Convert text code streams directly into an AST node graph
-		node, err := parser.ParseFile(fset, fileTarget, nil, parser.ImportsOnly)
-		if err != nil {
-			continue // Skip un-compilable files safely during validation sweeps
-		}
-
-		// Normalize paths to ensure cross-platform compatibility (Windows vs Unix)
-		normalizedPath := filepath.ToSlash(fileTarget)
-
-		// Loop through every import spec declared in the current file header
-		for _, imp := range node.Imports {
-			// Unquote the raw literal value string (e.g., "\"net/http\"" -> "net/http")
-			importPath := strings.Trim(imp.Path.Value, "\"")
-
-			// Check Rule 1: Pure Layer Zero-Dependency Isolation
-			if isPureLayerPath(normalizedPath) {
-				if isViolatingPureInvariants(importPath, config.ProjectName) {
-					fmt.Printf("❌ BOUNDARY VIOLATION [%s]: Pure layer is forbidden from importing external or I/O utilities: '%s'\n", fileTarget, importPath)
-					violations++
-				}
+		wg.Add(1)
+		go func(target string) {
+			defer wg.Done()
+			
+			// Parse file token specs including adjacent code comment nodes
+			node, err := parser.ParseFile(fset, target, nil, parser.ImportsOnly|parser.ParseComments)
+			if err != nil {
+				return // Gracefully skip un-compilable draft files during active development
 			}
 
-			// Check Rule 2: Protected Layer Banned I/O Packages
-			if isProtectedLayerPath(normalizedPath) {
-				for _, bannedPkg := range config.Rules.DisallowIOInProtected.ForbiddenPackages {
-					if importPath == bannedPkg || strings.HasPrefix(importPath, bannedPkg+"/") {
-						fmt.Printf("❌ LAYER INFRASTRUCTURE LEAK [%s]: Protected layer cannot import framework I/O: '%s'\n", fileTarget, importPath)
-						violations++
+			normalizedPath := filepath.ToSlash(target)
+			fileTokenMap := fset.File(node.Pos())
+
+			for _, imp := range node.Imports {
+				importPath := strings.Trim(imp.Path.Value, "\"")
+				pos := fset.Position(imp.Pos())
+
+				// 精确注解校验: Validate exact token alignments for inline bypass directives
+				if hasStrictIgnoreDirective(imp, fileTokenMap, node.Comments) {
+					continue
+				}
+
+				// A. EVALUATE PURE LAYER BOUNDARIES
+				if matchesPathPattern(normalizedPath, config.Rules.DisallowExternalImportsInPure.TargetDirs) {
+					if isViolatingPureInvariants(importPath, config.ProjectName) {
+						violationChan <- Violation{
+							Position: pos.String(),
+							Layer:    "Pure Layer (Zero I/O)",
+							Message:  fmt.Sprintf("Forbidden reference to infrastructure or external package: '%s'", importPath),
+						}
+					}
+				}
+
+				// B. EVALUATE PROTECTED LAYER BOUNDARIES
+				if matchesPathPattern(normalizedPath, config.Rules.DisallowIOInProtected.TargetDirs) {
+					for _, bannedPkg := range config.Rules.DisallowIOInProtected.ForbiddenPackages {
+						if importPath == bannedPkg || strings.HasPrefix(importPath, bannedPkg+"/") {
+							violationChan <- Violation{
+								Position: pos.String(),
+								Layer:    "Protected Layer (API Contracts)",
+								Message:  fmt.Sprintf("Direct framework or storage I/O leak detected: '%s'", importPath),
+							}
+						}
+					}
+				}
+
+				// C. EVALUATE CONCENTRIC INWARD-FLOW INVARIANTS
+				if currentRing, ok := identifyRingContext(normalizedPath, config.Rules.EnforceInwardDependencyFlow.Rings); ok {
+					if isViolatingRingFlow(importPath, currentRing, config.Rules.EnforceInwardDependencyFlow.Rings, config.ProjectName) {
+						violationChan <- Violation{
+							Position: pos.String(),
+							Layer:    fmt.Sprintf("%s Ring Boundary", currentRing.ID),
+							Message:  fmt.Sprintf("Inward flow breach! Inner rings cannot access outer ring spaces: '%s'", importPath),
+						}
 					}
 				}
 			}
+		}(fileTarget)
+	}
 
-			// Check Rule 3: Concentric Inward Ring Flow Invariant
-			if currentRing, ok := identifyRingContext(normalizedPath, config.Rules.EnforceInwardDependencyFlow.Rings); ok {
-				if isViolatingRingFlow(importPath, currentRing, config.Rules.EnforceInwardDependencyFlow.Rings, config.ProjectName) {
-					fmt.Printf("❌ RING DEPENDENCY BYPASS [%s]: Inward flow violation! Ring '%s' cannot access this cross-ring node: '%s'\n", fileTarget, currentRing.ID, importPath)
-					violations++
-				}
+	// 2. LIFECYCLE MANAGEMENT: Close transmission streams once processing routines finish execution
+	wg.Wait()
+	close(violationChan)
+
+	// 3. DIAGNOSTIC COMPILATION: Harvest and format compiled violations safely
+	violationCount := 0
+	for v := range violationChan {
+		violationCount++
+		fmt.Printf("❌ ARCHITECTURE VIOLATION\n   ↳ Position:  %s\n   ↳ Layer:     %s\n   ↳ Message:   %s\n\n", 
+			v.Position, v.Layer, v.Message)
+	}
+
+	return violationCount
+}
+
+// matchesPathPattern uses robust segment-token isolation to compile wildcard glob variables safely
+func matchesPathPattern(path string, patterns []string) bool {
+	for _, pattern := range patterns {
+		cleanPattern := filepath.ToSlash(pattern)
+		
+		// Strip glob qualifiers to isolate pure package roots cleanly
+		cleanPattern = strings.ReplaceAll(cleanPattern, "/**", "")
+		cleanPattern = strings.ReplaceAll(cleanPattern, "/*", "")
+		cleanPattern = strings.ReplaceAll(cleanPattern, "/...", "")
+		baseTarget := strings.Split(cleanPattern, "*.go")[0]
+
+		if strings.Contains(path, baseTarget) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasStrictIgnoreDirective executes token position line checks to eliminate loose substring collisions
+func hasStrictIgnoreDirective(imp *ast.ImportSpec, fileMap *token.File, commentGroups []*ast.CommentGroup) bool {
+	if fileMap == nil {
+		return false
+	}
+	importLine := fileMap.Line(imp.Pos())
+
+	for _, group := range commentGroups {
+		for _, comment := range group.List {
+			commentLine := fileMap.Line(comment.Pos())
+			
+			// In Go AST, the bypass directive must reside on the exact same line as the statement
+			if commentLine == importLine && strings.Contains(comment.Text, "bdracheck:ignore") {
+				return true
 			}
 		}
 	}
-
-	return violations
+	return false
 }
 
-func isPureLayerPath(path string) bool {
-	return strings.Contains(path, "/pure/")
-}
-
-func isProtectedLayerPath(path string) bool {
-	return strings.Contains(path, "/protected/")
-}
-
-// Check if a pure file imports standard library I/O or unauthorized cross-domain libraries
 func isViolatingPureInvariants(importPath string, projectName string) bool {
-	// Standard library utility packages allowed natively within the Pure Layer
 	allowedStdLib := map[string]bool{
 		"errors":  true,
 		"math":    true,
@@ -78,15 +146,15 @@ func isViolatingPureInvariants(importPath string, projectName string) bool {
 		"time":    true,
 		"fmt":     true,
 		"sort":    true,
-		"json":    true, // Serialization models are pure mutations
+		"strconv": true,
 	}
 
 	if allowedStdLib[importPath] || strings.HasPrefix(importPath, "encoding/") {
 		return false
 	}
 
-	// Permitted to import matching sub-packages of its EXACT horizontal domain ring path
-	if strings.HasPrefix(importPath, projectName+"/internal/ring") && strings.Contains(importPath, "/pure") {
+	// Dynamic Core Mapping: Permitted to interact with horizontal pure domains safely
+	if strings.Contains(importPath, "/pure") {
 		return false
 	}
 
@@ -95,24 +163,21 @@ func isViolatingPureInvariants(importPath string, projectName string) bool {
 
 func identifyRingContext(path string, rings []RingConfig) (RingConfig, bool) {
 	for _, ring := range rings {
-		if strings.Contains(path, ring.Path+"/") {
+		if strings.Contains(path, ring.Path+"/") || strings.HasSuffix(path, ring.Path) {
 			return ring, true
 		}
 	}
 	return RingConfig{}, false
 }
 
-// Verifies cross-ring dependency alignments matching the JSON configuration file rules
 func isViolatingRingFlow(importPath string, currentRing RingConfig, allRings []RingConfig, projectName string) bool {
-	// Skip validation loops if the target import does not belong to internal domains
-	if !strings.HasPrefix(importPath, projectName+"/internal/") {
+	if !strings.Contains(importPath, "internal/ring") {
 		return false
 	}
 
-	// Identify which ring the imported package belongs to
 	var targetRing *RingConfig
 	for _, ring := range allRings {
-		if strings.Contains(importPath, ring.Path+"/") {
+		if strings.Contains(importPath, ring.Path+"/") || strings.HasSuffix(importPath, ring.Path) {
 			targetRing = &ring
 			break
 		}
@@ -122,17 +187,17 @@ func isViolatingRingFlow(importPath string, currentRing RingConfig, allRings []R
 		return false
 	}
 
-	// Self-imports inside the exact same ring are always legal
+	// Self dependencies within the same domain are natively legal
 	if targetRing.ID == currentRing.ID {
 		return false
 	}
 
-	// Scan through pre-authorized allowed dependencies
+	// Cross-check pre-authorized allowed structures explicitly loaded from config file
 	for _, allowedID := range currentRing.AllowedDependencies {
 		if targetRing.ID == allowedID {
-			return false // Explicit clearance rule hit
+			return false
 		}
 	}
 
-	return true // If not explicitly cleared, it's a boundary bypass violation
+	return true
 }
