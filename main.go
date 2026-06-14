@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Config Matrix matching our dynamic JSON structure
+// ArchitectureConfig maps the incoming bdracheck.json contract matrix
 type ArchitectureConfig struct {
 	ProjectName string `json:"projectName"`
 	RingRules   []Rule `json:"ringRules"`
@@ -36,10 +36,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 1. DYNAMICALLY RESOLVE LOCAL REPOSITORY CONFIGURATION
+	// 1. RESOLVE LOCAL CONFIGURATION MATRICES
 	configFile, err := os.ReadFile("bdracheck.json")
 	if err != nil {
-		fmt.Println("🛑 [BDRA-LITE] Governance Error: bdracheck.json configuration file not found in current directory.")
+		fmt.Println("🛑 [BDRA-LITE] Governance Error: bdracheck.json configuration file not found in current execution folder.")
 		os.Exit(1)
 	}
 
@@ -53,11 +53,9 @@ func main() {
 	
 	fset := token.NewFileSet()
 	var violations []Violation
-
-	// Combine rules into a unified execution pool
 	allRules := append(config.RingRules, config.LayerRules...)
 
-	// 2. PARSE INTERNAL CODE SOURCE TREES
+	// 2. RECURSIVELY SWEEP INTERNAL LAYERS
 	err = filepath.Walk("internal", func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") {
 			return nil
@@ -77,12 +75,12 @@ func main() {
 
 			importPath := strings.Trim(imp.Path.Value, `"`)
 
-			// Respect the local line bypass escape flag
+			// Respect manual inline bypass parameters
 			if imp.Comment != nil && strings.Contains(imp.Comment.Text(), "bdracheck:ignore") {
 				continue
 			}
 
-			// 3. EVALUATE IMPORTS AGAINST DYNAMIC RULES
+			// 3. RUN EVALUATION GATES
 			for _, rule := range allRules {
 				if strings.Contains(normalizedPath, rule.TargetSegment) {
 					for _, forbidden := range rule.ForbiddenImports {
@@ -102,11 +100,11 @@ func main() {
 	})
 
 	if err != nil {
-		fmt.Printf("Fatal file processing error: %v\n", err)
+		fmt.Printf("Fatal code verification fault: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 4. REPORT ARCHITECTURE STATUS
+	// 4. ARCHITECTURE RESULTS EVALUATION REPORTING
 	if len(violations) > 0 {
 		fmt.Printf("\n🛑 [BDRA-LITE] Governance Gate FAILED: %d boundary violations detected!\n", len(violations))
 		fmt.Println("--------------------------------------------------------------------------------")
